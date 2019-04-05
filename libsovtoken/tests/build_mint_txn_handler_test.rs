@@ -23,6 +23,7 @@ use sovtoken::logic::parsers::common::ResponseOperations;
 use sovtoken::utils::json_conversion::JsonDeserialize;
 use sovtoken::logic::config::output_mint_config::MintRequest;
 use sovtoken::logic::request::Request;
+use sovtoken::logic::indy_sdk_api;
 
 mod utils;
 
@@ -379,4 +380,48 @@ fn mint_10_billion_tokens() {
     let utxos = utils::payment::get_utxo::send_get_utxo_request(&wallet, pool_handle, &dids[0], &payment_addresses[0]);
     assert_eq!(utxos[0].amount, tokens);
     assert_eq!(utxos[0].payment_address, payment_addresses[0]);
+}
+
+#[test]
+pub fn build_and_submit_mint_txn_works_for_twice_sending_mint_with_only_one_signature() {
+    indy::logger::set_default_logger(Some("trace")).unwrap();
+
+    let wallet = Wallet::new();
+    let setup = Setup::new(&wallet, SetupConfig {
+        num_addresses: 1,
+        num_trustees: 2,
+        num_users: 0,
+        mint_tokens: None,
+        fees: None,
+    });
+    let payment_addresses = &setup.addresses;
+    let pool_handle = setup.pool_handle;
+    let dids = setup.trustees.dids();
+
+
+    let output_json = json!([
+        {
+            "recipient": payment_addresses[0],
+            "amount": 100,
+        }
+    ]).to_string();
+
+    let (mut mint_req, _) = indy::payments::build_mint_req(
+        wallet.handle,
+        Some(dids[0]),
+        &output_json,
+        None,
+    ).wait().unwrap();
+
+    mint_req = indy_sdk_api::ledger::Ledger::multi_sign_request(wallet.handle, &dids[0], &mint_req).unwrap();
+
+    let result = indy::ledger::submit_request(pool_handle, &mint_req).wait().unwrap();
+    let response = ParseMintResponse::from_json(&result).unwrap();
+    assert_eq!(response.op, ResponseOperations::REJECT);
+
+    mint_req = indy_sdk_api::ledger::Ledger::multi_sign_request(wallet.handle, &dids[1], &mint_req).unwrap();
+
+    let result = indy::ledger::submit_request(pool_handle, &mint_req).wait().unwrap();
+    let response = ParseMintResponse::from_json(&result).unwrap();
+    assert_eq!(response.op, ResponseOperations::REJECT);
 }
